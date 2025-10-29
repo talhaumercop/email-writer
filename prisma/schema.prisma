@@ -24,7 +24,9 @@ model User {
   email    String    @unique
   image    String?
   accounts Account[]
-  userPosition     UserPosition  @default(FREE)
+  plan             UserPosition   @default(FREE) 
+  credits          Int      @default(10)
+  lastCreditUpdate DateTime @default(now())
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }

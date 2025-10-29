@@ -9,7 +9,7 @@ export const publicRoutes: string[] = [
  * Protected routes (authentication required)
  */
 export const protectedRoutes: string[] = [
-  "/",
+  "/home",
 ]
 
 /**

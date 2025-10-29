@@ -1,10 +1,20 @@
 import NextAuth from "next-auth";
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import { db } from "./lib/db";
-import { getUserById } from "./modules/auth/actions";
+import { UserPosition } from "@prisma/client";
 import authConfig from "./auth.config";
 
+import "next-auth/jwt";
+declare module "next-auth/jwt" {
+  interface JWT {
+    plan?: UserPosition;
+    credits?: number;
+  }
+}
+
 export const { handlers, signIn, signOut, auth } = NextAuth({
+  adapter: PrismaAdapter(db), // make sure this points to the same Prisma client
+  session: { strategy: "jwt" },
   callbacks: {
     async signIn({ user, account }) {
       if (!user || !account) return false;
@@ -14,13 +24,13 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       });
 
       if (!existingUser) {
-        const newUser = await db.user.create({
+        await db.user.create({
           data: {
             email: user.email!,
             name: user.name,
             image: user.image,
             accounts: {
-                // @ts-ignore
+              // @ts-ignore
               create: {
                 type: account.type,
                 provider: account.provider,
@@ -36,9 +46,8 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
             },
           },
         });
-        if (!newUser) return false;
       } else {
-        // Link social account if not exists
+        // link account if needed
         const existingAccount = await db.account.findUnique({
           where: {
             provider_providerAccountId: {
@@ -61,7 +70,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
               tokenType: account.token_type,
               scope: account.scope,
               idToken: account.id_token,
-            //   @ts-ignore
+              // @ts-ignore
               sessionState: account.session_state,
             },
           });
@@ -70,29 +79,50 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       return true;
     },
 
-    async jwt(params) {
-      const token = params.token;
-      if (!token.sub) return token;
+    // Ensure token.sub contains our DB user id (not a NextAuth UUID)
+async jwt({ token, user }) {
+  // On first sign in
+  if (user) {
+    const dbUser = await db.user.findUnique({
+      where: { email: user.email! },
+      select: { id: true, plan: true, credits: true, name: true },
+    });
 
-      const existingUser = await getUserById(token.sub);
-      if (!existingUser) return token;
+    if (dbUser) {
+      token.id = dbUser.id;
+      token.plan = dbUser.plan;
+      token.credits = dbUser.credits;
+      token.name = dbUser.name;
+    }
+  } else if (token.email) {
+    // On subsequent requests, revalidate from DB to ensure token carries the correct plan
+    const dbUser = await db.user.findUnique({
+      where: { email: token.email as string },
+      select: { id: true, plan: true, credits: true, name: true },
+    });
 
-      token.name = existingUser.name;
-      token.email = existingUser.email;
-      token.userPosition = existingUser.userPosition;
+    if (dbUser) {
+      token.id = dbUser.id;
+      token.plan = dbUser.plan;
+      token.credits = dbUser.credits;
+      token.name = dbUser.name;
+    }
+  }
 
-      return token;
-    },
+  return token;
+}
 
-    async session(params) {
-      if (params.session.user && params.token.sub) {
-        params.session.user.id = params.token.sub;
-        // @ts-ignore
-        params.session.user.userPosition = params.token.userPosition;
+
+,
+
+    async session({ session, token }) {
+      if (session.user) {
+        session.user.id = token.sub!
+        session.user.plan = token.plan as UserPosition
+        session.user.credits = token.credits as number
       }
-      return params.session;
+      return session
     },
   },
-  session: { strategy: "jwt" },
   ...authConfig,
 });
